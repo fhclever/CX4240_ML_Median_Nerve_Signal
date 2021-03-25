@@ -18,17 +18,21 @@ def relu(bias, inputs):
 def sig_derived(sig):
     return sig * (1 - sig)
 
+def relu_derived(relu):
+    return 
+
 class Neuron():
     def __init__(self, activation_func = 'sigmoid', bias = 1):
         self.b = bias
+        # self.weights will have one weight for each neuron in the next layer.
         self.weights = []
         self.act = activation_func
-        self.value = 0 # activation function result specifically;
+        self.value = 0 # activation function result specifically (sigmoid, linear, or relu of the linear combo of the input)
                        # self.output is what is going to the next layer (already multiplied by weights)
 
+    # Weights are initialized and randomized over a uniform distribution
     def initialize_weights(self, size):
         self.weights = np.array([uniform(-2,2) for i in range(size)])
-        # self.weights = np.ones((size))
 
     # Each neuron should have an output which is the activation function of the input value
     # and the weights. Each weight should have a corresponding output value that will go to its
@@ -52,7 +56,7 @@ class Neuron():
                 self.output = np.array([linear_combo(self.weights[i], self.inputs[0]) 
                     for i in range(len(self.weights))])
             else:
-                self.value = sig_act_func(self.b, self.inputs.sum())
+                self.value = relu(self.b, self.inputs.sum())
                 self.output = np.array([linear_combo(self.weights[i], self.value) 
                     for i in range(len(self.weights))])
             return self.output
@@ -67,10 +71,7 @@ class Neuron():
                     for i in range(len(self.weights))])
             return self.output
 
-    def calc_error_output(self, true):
-        self.derivative = (self.value - true)
-        return self.derivative
-
+    # Used for summarizing a neuron
     def summary(self, msg):
         try:
             print('\tNeuron' + str(msg) + ', Inputs ' + str(self.inputs))
@@ -81,21 +82,34 @@ class Neuron():
             print('\t\tWeights ' + str(self.weights))
 
 class Layer():
-    def __init__(self, num_neurons, num_weights, activation_func = 'sigmoid'):
-        print('Layer')
+    def __init__(self, num_neurons, num_weights, activation_func):
+        # num_neurons is number of neurons in the current layer
         self.size = num_neurons
-        self.neurons = np.array([Neuron() for i in range(num_neurons)])
+        # Initialize each neuron with its weights, where the number of weights should be the number of neurons
+        # in the next layer
+        self.neurons = np.array([Neuron(activation_func) for i in range(num_neurons)])
         for i in range(num_neurons):
             self.neurons[i].initialize_weights(num_weights)
 
+    # This will be called when the entire neural network is being trained. Each layer will store its input training
+    # points. If the number of inputs is the same as the number of neurons, then you are in the input layer. Otherwise,
+    # you are in one of the hidden layers and slightly different outputs will be produced.
+    # The output produced by training the neurons will be an m x n array where m = the number of neurons in the layer
+    # and n = the number of weights each neuron has. This means that self.outputs[i][j] will be the jth weight of the
+    # ith neuron in the given layer; self.outputs[i][j] will go from neuron i in layer (z-1) to neuron j in layer z.
     def train(self, X):
         self.input = X
         if self.input.shape == self.neurons.shape:
+            # This is the input layer. The shape of X should be (1,).
             self.outputs = np.array([self.neurons[i].activation(np.array([X[i]])) for i in range(self.size)])
         else:
+            # This is a hidden or output layer. The shape of X should be (num_prev_layer_neurons,num_weights_of_prev_layer_neurons).
+            # If m = number of neurons in previous layer, then X[:,i] is a vector of the weights from all m of those
+            # neurons that are going to the ith neuron in the current layer. This is transposed to keep things consistent.
             self.outputs = np.array([self.neurons[i].activation(X[:,i].transpose()) for i in range(self.size)])
         return self.outputs
 
+    # Used for summarizing a layer
     def summary(self, msg):
         print(msg)
         c = 0
@@ -105,8 +119,12 @@ class Layer():
         print('\n')
 
 class Vanilla_Network():
-    def __init__(self, num_input_nodes, activation_func, gamma = 0.003, num_output_nodes = 1, num_hidden_layers = 30):
+    def __init__(self, num_input_nodes, activation_func, gamma = 0.003, num_output_nodes = 1, num_hidden_layers = 30, num_hidden_layer_nodes = None):
         print('Vanilla_Network')
+        if num_hidden_layer_nodes != None:
+            self.num_hidden_nodes = num_hidden_layer_nodes
+        else:
+            self.num_hidden_nodes = num_input_nodes * 2 // 3
         if num_output_nodes < 1 or num_hidden_layers < 1 or num_input_nodes < 1:
             print('Error: number of neurons and layers must be >= 1')
             return 0
@@ -116,71 +134,146 @@ class Vanilla_Network():
         self.act = activation_func
         self.num_nodes = num_input_nodes
         self.num_hidden_layers = num_hidden_layers
-        self.input = Layer(num_input_nodes, num_input_nodes, activation_func)
-        self.hidden = np.array([Layer(num_input_nodes, num_input_nodes) for i in range(num_hidden_layers - 1)])
-        self.hidden = np.append(self.hidden, Layer(num_input_nodes, num_output_nodes))
+        self.num_outputs = num_output_nodes
+        self.input = Layer(num_input_nodes, self.num_hidden_nodes, self.act)
+        self.hidden = np.array([Layer(self.num_hidden_nodes, self.num_hidden_nodes, self.act) for i in range(num_hidden_layers - 1)])
+        self.hidden = np.append(self.hidden, Layer(self.num_hidden_nodes, self.num_outputs, 'linear'))
         self.num_outputs = num_output_nodes
         self.g = gamma
         self.predictions = []
 
     # Train the model's neurons on each training dataset point
     def train(self, X, y):
+        # Initialize the predictions that will be made on the training set during training. Just for storage.
         self.predictions = np.zeros((len(y), self.num_outputs))
-        c = 0
+        self.summary()
+        # Iterate through the training points.
         for i in range(len(y)):
-            primary_outputs = self.input.train(X[i]) # inital outputs of each neuron
-                                # for the training point based on the activation function
-            outputs = np.empty((self.num_nodes, self.num_nodes))
+            # Inital outputs of each neuron for the training point based on the activation function. X should be
+            # of shape (self.num_nodes,). primary_outputs will be of shape (self.num_nodes,self.num_hidden_nodes).
+            # So primary_outputs[i][j] will be the jth weight of the ith neuron in the input layer.
+            primary_outputs = self.input.train(X[i])
+            # This is a temporary variable for storage. It will have a slightly different shape than primary_outputs
+            # because after the input layer, the number of neurons and the number of weights will be different.
+            outputs = np.empty((self.num_hidden_nodes, self.num_hidden_nodes))
+            # Once you have gotten the outputs of the input layer (primary_outputs variable), iterate through each
+            # hidden layer and determine the outputs of those. Now, primary_outputs will be updated with the new
+            # weights for the following hidden layers.
             for j in range(len(self.hidden)):
                 outputs = self.hidden[j].train(primary_outputs)
                 primary_outputs = outputs
+            # The final prediction will be the linear combination (aka sum) of the last neurons' weights. The way
+            # this is done will be different based on the shape of the data.
             if self.num_outputs == 1:
                 self.predictions[i] = np.array([primary_outputs.sum()])
             else:
                 self.predictions[i] = np.array([primary_outputs[:,i].sum() for i in range(self.num_outputs)])
+            # After doing each training point, backpropagate and update weights.
             self.backpropagate(self.predictions[i], y[i])
-            c += 1
-            print('Processed ' + str(c) + ' training points.')
-        print(self.predictions)
-        # return np.corrcoef(self.predictions, y)[0,1]
+            print('Processed ' + str(i + 1) + ' training points.')
+        self.summary()
+        # print(self.predictions)
+        return np.corrcoef(self.predictions.ravel(), y.ravel())[0,1]
 
     def backpropagate(self, pred, true):
-        errors = np.ones((len(self.hidden) + 1, self.num_nodes, self.num_nodes))
-        # print(errors)
+        # pred and true should both be np arrays to account for instances where the number of outputs maybe not =1.
+        # Errors array: each layer will have an error for each of the weights for each neuron.
+        # This was helpful: http://neuralnetworksanddeeplearning.com/chap2.html
+        # This is what the code is based on: https://blog.yani.ai/backpropagation/
+        errors_input = np.ones((1, self.num_nodes, self.num_hidden_nodes))
+        errors_hidden = np.ones((self.num_hidden_layers, self.num_hidden_nodes, self.num_hidden_nodes))
+        errors = np.ones((self.num_hidden_layers + 1, self.num_nodes, self.num_nodes))
+        # Calculate the error for the output layer. Each neuron in this layer has self.num_outputs number of weights.
+        # For the output layer, the error (derivative) is always (y_pred - y_true) * neuron_value. See slides from lecture.
         for i in range(len(self.hidden[-1].neurons)):
             current_layer = self.hidden[-1]
             for j in range(self.num_outputs):
-                errors[errors.shape[0] - 1][i][j] = (pred - true).sum() * current_layer.neurons[i].value
-                self.update_weight(current_layer, i, j, errors[errors.shape[0] - 1][i][j])
-        # print(errors)
-        for i in range(len(self.hidden) - 1, 0, - 1):
-            current_layer = self.hidden[i - 1]
-            for j in range(len(current_layer.neurons)):
-                for k in range(len(current_layer.neurons[j].weights)):
-                    errors[i][j][k] = sig_derived(current_layer.neurons[j].value) * errors[i][j][k]
-                    if  self.hidden[i].neurons[j].value != 0:
-                        errors[i][j][k] /= self.hidden[i].neurons[j].value
-                    self.update_weight(current_layer, j, k, errors[i][j][k])
-        # print(errors)
-        for i in range(self.num_nodes):
+                # Have .sum() here because pred and true are arrays
+                errors_hidden[self.num_hidden_layers - 1][i][j] = (pred - true).sum()
+                # Update the output layer's weights
+                self.update_weight(current_layer, i, j, errors_hidden[self.num_hidden_layers - 1][i][j])
+        # For sigmoid activation function
+        if self.act == 'sigmoid':
+            # Now we can calculate the error for all of the other hidden layers. Iterate through each of the hidden layers,
+            # starting with the last one before the output hidden layer. For each neuron, update each of the weights. Now,
+            # Each error will be the error of the neuron after it (errors[l][i][j]) multiplied by the derivative of its own
+            # value, which is the sigmoid function (see the sig_derived() function). Based on my hand calculations of this
+            # derivative, the value of the next hidden layer's neuron should be removed from the error (this is what the)
+            # division part is doing.
+            for l in range(len(self.hidden) - 1, 0, - 1):
+                current_layer = self.hidden[l - 1]
+                if l == len(self.hidden) - 1:
+                    for i in range(len(current_layer.neurons)):
+                        for j in range(len(current_layer.neurons[i].weights)):
+                            errors_hidden[l - 1][i][j] = sig_derived(self.hidden[l].neurons[j].value) * errors_hidden[l][i][j]
+                            # Update the output layer's weights
+                            self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
+                else:
+                    for i in range(len(current_layer.neurons)):
+                        for j in range(len(current_layer.neurons[i].weights)):
+                            errors_hidden[l - 1][i][j] = sig_derived(self.hidden[l].neurons[j].value)
+                            errors_hidden[l - 1][i][j] *= (errors_hidden[l][j] * current_layer.neurons[i].weights).sum()
+                            # Update the output layer's weights
+                            self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
+            # The same is done for the input layer.
             current_layer = self.input
-            for j in range(len(self.input.neurons[i].weights)):
-                errors[0][i][j] = errors[1][i][j] * sig_derived(self.input.neurons[i].value) * self.input.neurons[i].inputs[0]
-                if self.hidden[0].neurons[j].value != 0:
-                    errors[0][i][j] /= self.hidden[0].neurons[j].value
-                self.update_weight(current_layer, i, j, errors[0][i][j])
-        # print(errors)
-        self.errors = errors
+            if len(self.hidden) == 1:
+                for i in range(len(current_layer.neurons)):
+                    for j in range(len(current_layer.neurons[i].weights)):
+                        print(current_layer.neurons[i].weights)
+                        print(errors_hidden.shape)
+                        errors_input[0][i][j] = sig_derived(self.hidden[0].neurons[j].value) * errors_hidden[0][j][0]
+                        # Update the output layer's weights
+                        self.update_weight(current_layer, i, j, errors_input[0][i][j])
+            else:
+                for i in range(self.num_nodes):
+                    for j in range(len(self.input.neurons[i].weights)):
+                        errors_input[0][i][j] = sig_derived(self.hidden[0].neurons[j].value)
+                        errors_input[0][i][j] *= (errors_hidden[0][j] * current_layer.neurons[i].weights).sum()
+                        # Update the output layer's weights
+                        self.update_weight(current_layer, i, j, errors_input[0][i][j])
+        elif self.act == 'linear':
+            # Now we can calculate the error for all of the other hidden layers. Iterate through each of the hidden layers,
+            # starting with the last one before the output hidden layer. For each neuron, update each of the weights. Now,
+            # Each error will be the error of the neuron after it (errors[l][i][j]) multiplied by the derivative of its own
+            # value, which will just be its value.
+            for l in range(len(self.hidden) - 1, 0, - 1):
+                current_layer = self.hidden[l - 1]
+                for i in range(len(current_layer.neurons)):
+                    for j in range(len(current_layer.neurons[i].weights)):
+                        errors[l][i][j] = current_layer.neurons[i].value * errors[l][i][j]
+                        # Update the output layer's weights
+                        self.update_weight(current_layer, i, j, errors[l][i][j])
+            # The same is done for the input layer.
+            for i in range(self.num_nodes):
+                current_layer = self.input
+                for j in range(len(self.input.neurons[i].weights)):
+                    errors[0][i][j] = errors[1][i][j] * self.input.neurons[i].value * self.input.neurons[i].inputs[0]
+                    self.update_weight(current_layer, i, j, errors[0][i][j])
+        elif self.act == 'ReLU':
+            pass
 
+    # Helper function to update the jth weight of the ith neuron in the given layer with the value determined by
+    # the backpropagation function. Learning rate g is established upon the creation of the neural network.
     def update_weight(self, layer, src, dest, val):
-        layer.neurons[src].weights[dest] -= self.g * val
+        layer.neurons[src].weights[dest] -= self.g * val * layer.neurons[src].value
 
-    def predict(self, x):
+    # Function to predict the classification of a given x. x must be a numpy array, even if you only want
+    # to predict the class of a single sample. If you are doing predictions to determine how well your
+    # accuracy is and you have some ground truth data for x, then you should set y_true equal to that
+    # ground truth data, which will result in your neural network having an "accuracy" attribute which is
+    # the correlation of your predictions with the truth. If you are predicting new samples, with no
+    # ground truth, then just exlude y_true entiring from the function call.
+    def predict(self, x, y_true = np.array([])):
         if len(x[0]) != self.num_nodes:
             print('Input for predict must be an array of arrays of the same size as inputs: [[],[]]')
             return 0
+        # Initialize the output to be the same size as the number of samples you want to predict.
         output = np.empty((len(x), self.num_outputs))
+        # Iterate through samples
         for i in range(len(x)):
+            # Do the same steps as you would for training the neural network, just don't include backpropagation at
+            # the end.
             primary_outputs = self.input.train(x[i]) # inital outputs of each neuron
                                 # for the training point based on the activation function
             outputs = np.empty((self.num_nodes, self.num_nodes))
@@ -191,20 +284,35 @@ class Vanilla_Network():
                 output[i] = np.array([linear_combo(1, primary_outputs.sum()) for i in range(self.num_outputs)])
             else:
                 output[i] = np.array([linear_combo(1, primary_outputs[:,i].sum()) for i in range(self.num_outputs)])
+        # Get the accuracy if you have ground truth data y_true.
+        if len(y_true) > 0 and self.num_outputs == 1:
+            self.accuracy = np.corrcoef(output.ravel(), y_true.ravel())
+        # elif len(y_true) > 0:
+        #     self.accuracy = np.corrcoef()
         return output
 
+    def acc(self, y_pred, y_test):
+        return (y_pred - y_test) ** 2
+
+    # Summarize entire neural network
     def summary(self):
         print('\n\nSUMMARY')
         print('Number of Inputs: ' + str(self.num_nodes) + '\nActivation Function of Hidden Layers: ' + str(self.act))
         print('Learning Rate: ' + str(self.g) + '\nNumber of Output Nodes per Sample: ' + str(self.num_outputs))
         print('Number of Hidden Layers: ' + str(self.num_hidden_layers))
-        print('[' + str(self.num_nodes) + ']' + '--> [' + str(self.num_nodes) + ' x ' + str(self.num_hidden_layers) + '--> [' + str(self.num_outputs) + ']')
+        print('[' + str(self.num_nodes) + ']' + '--> [' + str(self.num_nodes) + '] x ' + str(self.num_hidden_layers) + '--> [' + str(self.num_outputs) + ']')
+        print(self.input.summary('INPUT'))
+        for i in range(self.num_hidden_layers):
+            print(self.hidden[i].summary('HIDDEN'))
 
-# X = np.array([[1,2],[1,2],[1,2],[1,2],[1,2],[1,2],[9,3],[9,3],[8,5],[9,3],[9,3],[8,5]])
-# y = np.array([0.1,0.1,0.1,0.1,0.1,0.1,0.4,0.4,0.4,0.4,0.4,0.4])
-# y_2 = np.array([[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4]])
-# model = Vanilla_Network(2, 'linear', num_hidden_layers = 3)
-# model = Vanilla_Network(2, 'sigmoid', num_hidden_layers = 3)
+X = np.array([[1,2],[1,2],[1,2],[1,2],[1,2],[1,2],[9,3],[9,3],[8,5],[9,3],[9,3],[8,5]])
+y = np.array([0.1,0.1,0.1,0.1,0.1,0.1,0.4,0.4,0.4,0.4,0.4,0.4])
+X_4 = np.array([[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[9,3,2,1],[9,3,2,1],[8,5,2,1],[9,3,8,7],[9,3,8,7],[8,5,8,7]])
+y_2 = np.array([[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4]])
+# model_lin = Vanilla_Network(4, 'linear', num_hidden_layers = 3, num_hidden_layer_nodes = 3)
+model_sig = Vanilla_Network(4, 'sigmoid', num_hidden_layers = 2, num_hidden_layer_nodes = 3)
+# model_lin.train(X_4, y)
+model_sig.train(X_4, y)
 # model.train(X[5:8], y[5:8])
 # model.train(X, y)
 # print(model.predict(np.array([[1,2],[9,3]])))
@@ -216,7 +324,7 @@ class Vanilla_Network():
 # model = Vanilla_Network(2, 'sigmoid', num_hidden_layers = 1, num_output_nodes = 2)
 # model.train(X, y_2)
 # model.summary()
-# sys.exit()
+sys.exit()
 
 # Create data matrix: will have 175 positions. Positions 0,4,5,9,165,169,170,174 are empty (corners).
 # All other positions will have 817 rows and 500, 1000, or 1500 columns. Each position represents
@@ -265,49 +373,5 @@ X_train_reduced_dim = X_train[:,0::3]
 if len(X_train_reduced_dim[0]) == 817 // 3:
     reg_relu = Vanilla_Network(817 // 3)
     reg_relu.train(X_train_reduced_dim, y)
-    pickle.dump(reg_relu, 'relu_272_5_1')
+    pickle.dump(reg_relu, open('relu_272_5_1.sav', 'wb'))
 
-# import torch
-# import torch.nn as nn
-# import torch.nn.functional as F
-
-
-# class Net(nn.Module):
-
-#     def __init__(self):
-#         super(Net, self).__init__()
-#         # 1 input image channel, 6 output channels, 3x3 square convolution
-#         # kernel
-#         self.conv1 = nn.Conv2d(1, 6, 3)
-#         self.conv2 = nn.Conv2d(6, 16, 3)
-#         # an affine operation: y = Wx + b
-#         self.fc1 = nn.Linear(16 * 5 * 35, 120)  # 6*6 from image dimension
-#         self.fc2 = nn.Linear(120, 84)
-#         self.fc3 = nn.Linear(84, 10)
-
-#     def forward(self, x):
-#         # Max pooling over a (2, 2) window
-#         x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
-#         # If the size is a square you can only specify a single number
-#         x = F.max_pool2d(F.relu(self.conv2(x)), 2)
-#         x = x.view(-1, self.num_flat_features(x))
-#         x = F.relu(self.fc1(x))
-#         x = F.relu(self.fc2(x))
-#         x = self.fc3(x)
-#         return x
-
-#     def num_flat_features(self, x):
-#         size = x.size()[1:]  # all dimensions except the batch dimension
-#         num_features = 1
-#         for s in size:
-#             num_features *= s
-#         return num_features
-
-
-# net = Net()
-# print(net)
-
-# X = np.array([[1,2,3,4],[2,3,5,1],[3,4,5,4],[9,3,2,1],[8,5,3,0]])
-# y = np.array([1,1,2,4,4])
-
-# out = net()
