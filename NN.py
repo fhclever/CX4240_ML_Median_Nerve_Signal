@@ -19,7 +19,12 @@ def sig_derived(sig):
     return sig * (1 - sig)
 
 def relu_derived(relu):
-    return 
+    if relu > 0:
+        return 1
+    elif relu < 0:
+        return 0
+    else:
+        return None 
 
 class Neuron():
     def __init__(self, activation_func = 'sigmoid', bias = 1):
@@ -71,6 +76,14 @@ class Neuron():
                     for i in range(len(self.weights))])
             return self.output
 
+    def derivative(self):
+        if self.act == 'linear':
+            return self.value
+        elif self.act == 'sigmoid':
+            return sig_derived(self.value)
+        elif self.act == 'ReLU':
+            return relu_derived(self.value)
+
     # Used for summarizing a neuron
     def summary(self, msg):
         try:
@@ -119,18 +132,18 @@ class Layer():
         print('\n')
 
 class Vanilla_Network():
-    def __init__(self, num_input_nodes, activation_func, gamma = 0.003, num_output_nodes = 1, num_hidden_layers = 30, num_hidden_layer_nodes = None):
+    def __init__(self, num_input_nodes, activation_func, gamma = 0.003, num_output_nodes = 1, num_hidden_layers = 7, num_hidden_layer_nodes = None):
         print('Vanilla_Network')
-        if num_hidden_layer_nodes != None:
-            self.num_hidden_nodes = num_hidden_layer_nodes
-        else:
-            self.num_hidden_nodes = num_input_nodes * 2 // 3
         if num_output_nodes < 1 or num_hidden_layers < 1 or num_input_nodes < 1:
             print('Error: number of neurons and layers must be >= 1')
             return 0
         if activation_func not in ['sigmoid', 'ReLU', 'linear']:
             print('Error: activation function must be sigmoid, ReLU, or linear')
             return 0
+        if num_hidden_layer_nodes != None:
+            self.num_hidden_nodes = num_hidden_layer_nodes
+        else:
+            self.num_hidden_nodes = num_input_nodes * 2 // 3 + num_output_nodes
         self.act = activation_func
         self.num_nodes = num_input_nodes
         self.num_hidden_layers = num_hidden_layers
@@ -144,9 +157,11 @@ class Vanilla_Network():
 
     # Train the model's neurons on each training dataset point
     def train(self, X, y):
+        self.training_data = X
+        self.gtruth = y
         # Initialize the predictions that will be made on the training set during training. Just for storage.
         self.predictions = np.zeros((len(y), self.num_outputs))
-        self.summary()
+        # self.summary()
         # Iterate through the training points.
         for i in range(len(y)):
             # Inital outputs of each neuron for the training point based on the activation function. X should be
@@ -170,9 +185,13 @@ class Vanilla_Network():
                 self.predictions[i] = np.array([primary_outputs[:,i].sum() for i in range(self.num_outputs)])
             # After doing each training point, backpropagate and update weights.
             self.backpropagate(self.predictions[i], y[i])
-            print('Processed ' + str(i + 1) + ' training points.')
-        self.summary()
+            if (i - 1) % 50 == 0:
+                print('Processed ' + str(i + 1) + ' training points.')
+        # self.summary()
         # print(self.predictions)
+        filename = self.act + '_' + str(self.num_nodes) + 'inode_' + str(self.num_hidden_nodes) + 'hnode_' + str(self.num_outputs) + 'onot_'
+        filename += str(self.num_hidden_layers) + 'hlayers_' + str(self.g) + 'g_' + str(len(y)) + 'tps' + '.sav'
+        pickle.dump(self, open(filename, 'wb'))
         return np.corrcoef(self.predictions.ravel(), y.ravel())[0,1]
 
     def backpropagate(self, pred, true):
@@ -192,66 +211,42 @@ class Vanilla_Network():
                 errors_hidden[self.num_hidden_layers - 1][i][j] = (pred - true).sum()
                 # Update the output layer's weights
                 self.update_weight(current_layer, i, j, errors_hidden[self.num_hidden_layers - 1][i][j])
-        # For sigmoid activation function
-        if self.act == 'sigmoid':
-            # Now we can calculate the error for all of the other hidden layers. Iterate through each of the hidden layers,
-            # starting with the last one before the output hidden layer. For each neuron, update each of the weights. Now,
-            # Each error will be the error of the neuron after it (errors[l][i][j]) multiplied by the derivative of its own
-            # value, which is the sigmoid function (see the sig_derived() function). Based on my hand calculations of this
-            # derivative, the value of the next hidden layer's neuron should be removed from the error (this is what the)
-            # division part is doing.
-            for l in range(len(self.hidden) - 1, 0, - 1):
-                current_layer = self.hidden[l - 1]
-                if l == len(self.hidden) - 1:
-                    for i in range(len(current_layer.neurons)):
-                        for j in range(len(current_layer.neurons[i].weights)):
-                            errors_hidden[l - 1][i][j] = sig_derived(self.hidden[l].neurons[j].value) * errors_hidden[l][i][j]
-                            # Update the output layer's weights
-                            self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
-                else:
-                    for i in range(len(current_layer.neurons)):
-                        for j in range(len(current_layer.neurons[i].weights)):
-                            errors_hidden[l - 1][i][j] = sig_derived(self.hidden[l].neurons[j].value)
-                            errors_hidden[l - 1][i][j] *= (errors_hidden[l][j] * current_layer.neurons[i].weights).sum()
-                            # Update the output layer's weights
-                            self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
-            # The same is done for the input layer.
-            current_layer = self.input
-            if len(self.hidden) == 1:
+        # Now we can calculate the error for all of the other hidden layers. Iterate through each of the hidden layers,
+        # starting with the last one before the output hidden layer. For each neuron, update each of the weights. Now,
+        # Each error will be the error of the neuron after it (errors[l][i][j]) multiplied by the derivative of its own
+        # value, which is the sigmoid function (see the sig_derived() function). Based on my hand calculations of this
+        # derivative, the value of the next hidden layer's neuron should be removed from the error (this is what the)
+        # division part is doing.
+        for l in range(len(self.hidden) - 1, 0, - 1):
+            current_layer = self.hidden[l - 1]
+            if l == len(self.hidden) - 1:
                 for i in range(len(current_layer.neurons)):
                     for j in range(len(current_layer.neurons[i].weights)):
-                        print(current_layer.neurons[i].weights)
-                        print(errors_hidden.shape)
-                        errors_input[0][i][j] = sig_derived(self.hidden[0].neurons[j].value) * errors_hidden[0][j][0]
+                        errors_hidden[l - 1][i][j] = self.hidden[l].neurons[j].derivative() * errors_hidden[l][i][j]
                         # Update the output layer's weights
-                        self.update_weight(current_layer, i, j, errors_input[0][i][j])
+                        self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
             else:
-                for i in range(self.num_nodes):
-                    for j in range(len(self.input.neurons[i].weights)):
-                        errors_input[0][i][j] = sig_derived(self.hidden[0].neurons[j].value)
-                        errors_input[0][i][j] *= (errors_hidden[0][j] * current_layer.neurons[i].weights).sum()
-                        # Update the output layer's weights
-                        self.update_weight(current_layer, i, j, errors_input[0][i][j])
-        elif self.act == 'linear':
-            # Now we can calculate the error for all of the other hidden layers. Iterate through each of the hidden layers,
-            # starting with the last one before the output hidden layer. For each neuron, update each of the weights. Now,
-            # Each error will be the error of the neuron after it (errors[l][i][j]) multiplied by the derivative of its own
-            # value, which will just be its value.
-            for l in range(len(self.hidden) - 1, 0, - 1):
-                current_layer = self.hidden[l - 1]
                 for i in range(len(current_layer.neurons)):
                     for j in range(len(current_layer.neurons[i].weights)):
-                        errors[l][i][j] = current_layer.neurons[i].value * errors[l][i][j]
+                        errors_hidden[l - 1][i][j] = self.hidden[l].neurons[j].derivative()
+                        errors_hidden[l - 1][i][j] *= (errors_hidden[l][j] * current_layer.neurons[i].weights).sum()
                         # Update the output layer's weights
-                        self.update_weight(current_layer, i, j, errors[l][i][j])
-            # The same is done for the input layer.
+                        self.update_weight(current_layer, i, j, errors_hidden[l - 1][i][j])
+        # The same is done for the input layer.
+        current_layer = self.input
+        if len(self.hidden) == 1:
+            for i in range(len(current_layer.neurons)):
+                for j in range(len(current_layer.neurons[i].weights)):
+                    errors_input[0][i][j] = self.hidden[0].neurons[j].derivative() * errors_hidden[0][j][0]
+                    # Update the output layer's weights
+                    self.update_weight(current_layer, i, j, errors_input[0][i][j])
+        else:
             for i in range(self.num_nodes):
-                current_layer = self.input
                 for j in range(len(self.input.neurons[i].weights)):
-                    errors[0][i][j] = errors[1][i][j] * self.input.neurons[i].value * self.input.neurons[i].inputs[0]
-                    self.update_weight(current_layer, i, j, errors[0][i][j])
-        elif self.act == 'ReLU':
-            pass
+                    errors_input[0][i][j] = self.hidden[0].neurons[j].derivative()
+                    errors_input[0][i][j] *= (errors_hidden[0][j] * current_layer.neurons[i].weights).sum()
+                    # Update the output layer's weights
+                    self.update_weight(current_layer, i, j, errors_input[0][i][j])
 
     # Helper function to update the jth weight of the ith neuron in the given layer with the value determined by
     # the backpropagation function. Learning rate g is established upon the creation of the neural network.
@@ -301,77 +296,81 @@ class Vanilla_Network():
         print('Learning Rate: ' + str(self.g) + '\nNumber of Output Nodes per Sample: ' + str(self.num_outputs))
         print('Number of Hidden Layers: ' + str(self.num_hidden_layers))
         print('[' + str(self.num_nodes) + ']' + '--> [' + str(self.num_nodes) + '] x ' + str(self.num_hidden_layers) + '--> [' + str(self.num_outputs) + ']')
+    
+    def print_layers(self):
         print(self.input.summary('INPUT'))
         for i in range(self.num_hidden_layers):
             print(self.hidden[i].summary('HIDDEN'))
 
+
+# sys.exit()
 X = np.array([[1,2],[1,2],[1,2],[1,2],[1,2],[1,2],[9,3],[9,3],[8,5],[9,3],[9,3],[8,5]])
 y = np.array([0.1,0.1,0.1,0.1,0.1,0.1,0.4,0.4,0.4,0.4,0.4,0.4])
 X_4 = np.array([[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4],[9,3,2,1],[9,3,2,1],[8,5,2,1],[9,3,8,7],[9,3,8,7],[8,5,8,7]])
 y_2 = np.array([[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.1,0.2],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4],[0.85,0.4]])
 # model_lin = Vanilla_Network(4, 'linear', num_hidden_layers = 3, num_hidden_layer_nodes = 3)
 model_sig = Vanilla_Network(4, 'sigmoid', num_hidden_layers = 2, num_hidden_layer_nodes = 3)
-# model_lin.train(X_4, y)
-model_sig.train(X_4, y)
-# model.train(X[5:8], y[5:8])
-# model.train(X, y)
-# print(model.predict(np.array([[1,2],[9,3]])))
-# print(model.predict(np.array([[100,3]])))
-# print(model.predict(np.array([[9,4]])))
-# print(model.predict(np.array([[50,50]])))
-# print(model.predict(np.array([[2,1]])))
-# print(model.predict(np.array([[1,3]])))
-# model = Vanilla_Network(2, 'sigmoid', num_hidden_layers = 1, num_output_nodes = 2)
-# model.train(X, y_2)
-# model.summary()
-sys.exit()
+# # model_lin.train(X_4, y)
+# model_sig.train(X_4, y)
+# # model.train(X[5:8], y[5:8])
+# # model.train(X, y)
+# # print(model.predict(np.array([[1,2],[9,3]])))
+# # print(model.predict(np.array([[100,3]])))
+# # print(model.predict(np.array([[9,4]])))
+# # print(model.predict(np.array([[50,50]])))
+# # print(model.predict(np.array([[2,1]])))
+# # print(model.predict(np.array([[1,3]])))
+# # model = Vanilla_Network(2, 'sigmoid', num_hidden_layers = 1, num_output_nodes = 2)
+# # model.train(X, y_2)
+# # model.summary()
 
-# Create data matrix: will have 175 positions. Positions 0,4,5,9,165,169,170,174 are empty (corners).
-# All other positions will have 817 rows and 500, 1000, or 1500 columns. Each position represents
-# an electrode on the patch.
-evCA = np.array(loadmat('evCA.mat')['evCA']).ravel()
-training_size = 100
-num_outputs = 1
-y = np.empty((167, training_size, num_outputs))
-for i in range(167):
-    y[i] = np.ones((training_size, num_outputs)) * i
-y = y.ravel()
-print(y)
-time_features = 200
-# reg = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 2)
-# pickle.dump(reg, open('sig_817_2_1.sav', 'wb'))
-# reg = Vanilla_Network(817, 'linear', num_hidden_layers = 2)
-# pickle.dump(reg, open('lin_817_2_1.sav', 'wb'))
-# reg_sig = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 5, num_output_nodes = 2)
-# pickle.dump(reg_sig, open('sig_817_5_2.sav', 'wb'))
-# reg_lin = Vanilla_Network(817, 'linear', num_hidden_layers = 5, num_output_nodes = 2)
-# pickle.dump(reg_lin, open('lin_817_5_2.sav', 'wb'))
-reg_sig = Vanilla_Network(817, 'sigmoid', gamma = 0.05, num_hidden_layers = 2)
-pickle.dump(reg_sig, open('sig_817_2_1.sav', 'wb'))
-reg_lin = Vanilla_Network(817, 'linear', gamma = 0.05, num_hidden_layers = 2)
-pickle.dump(reg_lin, open('lin_817_2_1.sav', 'wb'))
-# reg_sig = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 5)
-# pickle.dump(reg_sig, open('sig_817_5_1.sav', 'wb'))
-# reg_lin = Vanilla_Network(817, 'linear', num_hidden_layers = 5)
-# pickle.dump(reg_lin, open('lin_817_5_1.sav', 'wb'))
-# reg_relu = Vanilla_Network(817, 'ReLU', num_hidden_layers = 5)
-# pickle.dump(reg_relu, open('relu_817_5_1.sav', 'wb'))
-X_train = np.empty((167 * training_size, 817))
-c = 0
-for i in range(len(evCA)):
-    if len(evCA[i]) > 1:
-        # 200 training points
-        temp = evCA[i][:,0:training_size].transpose()
-        for j in range(training_size):
-            X_train[c] =temp[j]
-            c += 1
-accuracy = reg_sig.train(X_train, y)
-accuracy = reg_lin.train(X_train, y)
-# reg_relu.train(X_train, y)
 
-X_train_reduced_dim = X_train[:,0::3]
-if len(X_train_reduced_dim[0]) == 817 // 3:
-    reg_relu = Vanilla_Network(817 // 3)
-    reg_relu.train(X_train_reduced_dim, y)
-    pickle.dump(reg_relu, open('relu_272_5_1.sav', 'wb'))
+# # Create data matrix: will have 175 positions. Positions 0,4,5,9,165,169,170,174 are empty (corners).
+# # All other positions will have 817 rows and 500, 1000, or 1500 columns. Each position represents
+# # an electrode on the patch.
+# evCA = np.array(loadmat('evCA.mat')['evCA']).ravel()
+# training_size = 100
+# num_outputs = 1
+# y = np.empty((167, training_size, num_outputs))
+# for i in range(167):
+#     y[i] = np.ones((training_size, num_outputs)) * i
+# y = y.ravel()
+# print(y)
+# time_features = 200
+# # reg = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 2)
+# # pickle.dump(reg, open('sig_817_2_1.sav', 'wb'))
+# # reg = Vanilla_Network(817, 'linear', num_hidden_layers = 2)
+# # pickle.dump(reg, open('lin_817_2_1.sav', 'wb'))
+# # reg_sig = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 5, num_output_nodes = 2)
+# # pickle.dump(reg_sig, open('sig_817_5_2.sav', 'wb'))
+# # reg_lin = Vanilla_Network(817, 'linear', num_hidden_layers = 5, num_output_nodes = 2)
+# # pickle.dump(reg_lin, open('lin_817_5_2.sav', 'wb'))
+# reg_sig = Vanilla_Network(817, 'sigmoid', gamma = 0.05, num_hidden_layers = 2)
+# pickle.dump(reg_sig, open('sig_817_2_1.sav', 'wb'))
+# reg_lin = Vanilla_Network(817, 'linear', gamma = 0.05, num_hidden_layers = 2)
+# pickle.dump(reg_lin, open('lin_817_2_1.sav', 'wb'))
+# # reg_sig = Vanilla_Network(817, 'sigmoid', num_hidden_layers = 5)
+# # pickle.dump(reg_sig, open('sig_817_5_1.sav', 'wb'))
+# # reg_lin = Vanilla_Network(817, 'linear', num_hidden_layers = 5)
+# # pickle.dump(reg_lin, open('lin_817_5_1.sav', 'wb'))
+# # reg_relu = Vanilla_Network(817, 'ReLU', num_hidden_layers = 5)
+# # pickle.dump(reg_relu, open('relu_817_5_1.sav', 'wb'))
+# X_train = np.empty((167 * training_size, 817))
+# c = 0
+# for i in range(len(evCA)):
+#     if len(evCA[i]) > 1:
+#         # 200 training points
+#         temp = evCA[i][:,0:training_size].transpose()
+#         for j in range(training_size):
+#             X_train[c] =temp[j]
+#             c += 1
+# accuracy = reg_sig.train(X_train, y)
+# accuracy = reg_lin.train(X_train, y)
+# # reg_relu.train(X_train, y)
+
+# X_train_reduced_dim = X_train[:,0::3]
+# if len(X_train_reduced_dim[0]) == 817 // 3:
+#     reg_relu = Vanilla_Network(817 // 3)
+#     reg_relu.train(X_train_reduced_dim, y)
+#     pickle.dump(reg_relu, open('relu_272_5_1.sav', 'wb'))
 
